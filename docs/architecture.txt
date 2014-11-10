@@ -1,0 +1,145 @@
+
+Client-side(Producer.publish) :
+
+
+ClientNotifyAPI.notifier('xuecheng.li', 'callfunc', 'call', host='192.168.10.9')
+
+                                                  msg: {'_unique_id': '19ad1909f960468aaa6b9abbc23b71b9',     ---> help(Add unique_id for checking duplicate messages.)
+                                                        '_msg_id': 'aba0fd05390e48bfa429aabae089f825',
+                                                        'version': '1.0',
+                                                        '_reply_q': 'reply_1df76d167546443c831ddb00b640c3fe',
+                                                        'args': {'payload': {'name': 'xuecheng.li'}},
+                                                        'namespace': None,
+                                                        'method': 'callfunc'}
+
+                                                           |
+                                                           | pass it to consumer & producer
+                                                           |
+                                                           V
+    +-------------------+   invoke method 'call'   +--------------------------------------+
+    | ClientProducerAPI | ---------------------->  | multicall(common.rpc.amqp:multicall) |
+    +-------------------+                          +--------------------------------------+
+                                                      |
+                                                      |                    +----------------------------------------------+  connect to Broker(Rabbitmq-Server)
+                                                      |                    | connection(common.rpc.impl_kombu:Connection) | -------------------+----------------------------------+
+                                                      |                    +----------------------------------------------+                    | return a channel                 | return a channel
+                                                      |                                   ^                    ^       |                       |                                  |
+                                                      |                                   | assigned to Class  |       |                       |                                  |
+                                                      |  create  +-------------------------------------------+ |       |                       |                                  |
+                                                      | -------> |   connection_pool(common.rpc.amqp:Pool)   | |       | assigned as           |                                  |
+                                                      |          +-------------------------------------------+ |       | self.connection       |                                  |
+                                                      |              | wrapped as self.connection_pool         |create |                       |                                  |
+                                                      |              V                                         |       V                       |                                  |
+                                                      |  create     +------------------------------------------------------+                   |                                  |
+                                                      | ----------> |        ReplyProxy(common.rpc.amqp.ReplyProxy)        | <----[msg]--------|-----<<<<<<--+                    |
+                                                      |             +------------------------------------------------------+                   |             |                    |
+                                                      |              |  |        | declare_direct_consumer                       + ---         V             |self._process_data  |
+                                                      |              |  |        | 'reply_1df7...c3fe' as topic                 |      +------------+        |assigned to it      |
+                                                      |              |  |       V                                               |  +- -|self.channel| <----------<<<<<<<<<<<<------------<<<<<<<<<<<<<<<-------------<<<<<<<<------+
+                                                      |              V  |   +------------------------------------------------+  |  |   +------------+        |                    |                                                |
+                                                      |              |  |   | consumer(common.rpc.impl_kombu:DirectConsumer) |--|  |   +----------+          |                    |                                                |
+                                                      |              |  |   +------------------------------------------------+  |  |   |          | -->>>----+                    |                                                |
+                                                      |        req [msg]|                                                       |  |   | callback |                               |                                                |
+                                                      |              |  |                                                       |  |   |          | <-------------+               |                                                |
+                                                      |              |  |                                                       |[msg] +----------+               |               |                                                |
+                                                      |              V  |   consume_in_thread   +-------------+                 |  |   +-----------------------+  |               |                                                |
+                                                      |              |  |  -------------------> | greenthread |                 |  +-> | exchange(named $topic)|  |               |                                                ^
+                                                      |              |  |                       +-------------+                 |      +-----------------------+  |               |                                                ^
+                                                      |              |  |                              |                        |        |                 |    [msg] consume     |                                                ^
+                                                      |              |  |                              |                        |        |bound together [msg]    |               |                                                ^
+                                                      |              V  |                              |                        |        |                 V      |               |                                                ^
+                                                      |              |                                 |                        |      +---------------------+    |               |                                                ^
+                                                      |              |                                 |                        |      | queue(named $topic) | ---+               |                                                ^
+                                                      |              |                                 |                        |      +---------------------+                    |                                                |
+                                                      |              |                                 |         invoke          + ---     ^                                      |                                                |
+                                                      |              |                                 |                                   |                                      |                                              [msg] resp
+                                                      |              |                                 +-----------------------------------+                                      |                                                |
+                                                      |              V                                                                 +------------------------------------------+                                                |
+                                                      |             +------------------------------------------------+     +---        V                                                                                           |
+                                                      |             | producer(common.rpc.impl_kombu:TopicPublisher) | -- |       +--------------+         routing-key: 'daolicloud.x.x.x.x'($topic)                               ^
+                                                      |             +------------------------------------------------+    |       | self.channel |  ----------------[msg]------------+                                             ^
+                                                      |                                  |                                |       +--------------+                  req              |                                             ^
+                                                      |                                  |                                |            ^    |                                        |                                             ^
+                                                      |                                  |                                |      req [msg]  | bound together                         V                                             ^
+                                                      |                                  |                                |            |    |                                        |                                             ^
+                                                      |                                  |                                |       +--------------------------+                       |                                             |
+                                                      |                                  V                                |  +--> | exchange(named from conf)|                +----- | ---------------                             |
+                                                      |                                  |                                |  |    +--------------------------+                |      V                                             |
+                                                      |                                  |                                |[msg] req                                          | +----------+ name: 'openstack'                     |
+                                                      |                                  |                                |  | publish                                        | | exchange | type: 'topic'                         |                         exchange, queues are
+                                                      |                                  |                                |  |    +----------+                                | +----------+                                       |                         created by queue.declare()
+                                                      |                                  |                                |  +--- | producer |                                    |      |                                      +-------+ key:               in consumer of ClientProducerAPI
+                                                      |                                  V                                |       +----------+                                    |    [msg] req                                | queue | 'reply_1df7...c3fe'
+                                                      |                                  |                                |         ^                                             |      V                                      +-------+
+                                                      |                                  |                                 +---     |                              key:        +-----+ +-----+ key:                                 ^
+                                                      |                                  |                send                      |                              'daolicloud'|queue| |queue| 'daolicloud.x.x.x.x'               [msg] resp
+                                                      |                                  +--------------->>>>>>>------[msg]---------+                                          +-----+ +-----+                                      |
+                                                                                                                       req                            exchange, queues are               |                                      +----------+ name: 'reply_1df7...c3fe'
+                                                                                                                                                      created by queue.declare()         |                                      | exchange | type: 'direct'
+                                                                                                                                                      in consumer of AMQPConsumerServer  V                                      +----------+                            |
+                                                                                                                                                                                         |                                          ^                                   |
+                                                                                                                                                                                         |                                          |     AMQP Broker(Rabbitmq-Server)  |
+                                                                                                                                                                                         V                              ----------  | ----------------------------------+
+                                                                                                                                                                                         |                                          |
+                                                                                                                                                                                         +--------------------->>>>>>>>--[msg]-------------->>>>>>>>>>>-----------+
+                                                                                                                                                                                                                          req       |                             |
+                                                                                                                                                                          resp                                                      |                             |
+                                                                                                                                                           +-------------[msg]--->>>>>>---------+                                   |                             |
+Server-side(Consumer.consume) :                                                                                                                            |              send                  |                                   |                             |
+                                                                                                                               +-------------------------------------------------+     +---     V                                   |                             V
+    +--------------------+                                                                                                     | producer(common.rpc.impl_kombu:DirectPublisher) | -- |       +----------+                          |                             |
+    | AMQPConsumerServer |                                                                                                     +-------------------------------------------------+    |  +--- | producer |                          |                             |
+    +--------------------+                                                                                                         ^ 'reply_1df7...c3fe' as exchange_name             |  |    +----------+                          |                             |
+            |                                                                                                                    [msg]  & routing_key & topic                         |  | publish                                  |                             |
+            |                                                                                                                      |                                                  |  |                                          |                             |
+            |      create                                           +-------------------------------------------------+  resp    +----------------------------------+                 |[msg] resp                                   |                             |
+            | ----------------------------------------------------> | dispatcher(common.rpc.dispatcher:RpcDispatcher) | -[msg]-> | ctxt(common.rpc.amqp.RpcContext) |                 |  |                                          |                             V
+            |                                                       +-------------------------------------------------+          +----------------------------------+                 |  |    +--------------------------+          |                             |
+            |                                                                 wrapped in proxy_cb as self.proxy |   ^                       ^                                         |  +--> | exchange(named by $topic)|          |                             |
+            |                                                                                                   | [msg] req                 | generate                                |       +--------------------------+          |                             |
+            |                                                                                                   V   |                       |                                         |          |       |                          |                             |
+            |                                                     wrapped in proxy_cb as self.connection_pool  +-----------------------------------------+                            |        [msg]     |                          |                             |
+            |                                                                            +-------------------> | proxy_cb(common.rpc.amqp:ProxyCallback) | <-----+                    |          |       | bound together           |                             |
+            |                                                                            |                     +-----------------------------------------+       |                    |          V       |                          |                             |
+            |                                                                            |                                                                       |                    |       +--------------+                      |                             V
+            |      create      +----------------------------------------------+          |                                                                       |                    |       | self.channel |  ------ [msg] -------+                             |
+            | ---------------> | connection(common.rpc.amqp:ConnectionContext)|          |                                                                       |                    |       +--------------+     routing-key: 'reply_1df7...c3fe'($topic)       |
+            |                  +----------------------------------------------+          |                                                                       |                     +---       ^                                                               |
+            |                        |                                                   |                                                                       |                                |                                                               |
+            |                        |     create    +---------------------------------------+                                   wrapped in consumer as callback |                                |                                                               |
+            |                        | ------------> | connection_pool(common.rpc.amqp:Pool) |    and been invoked in action consume when a request msg received |                                |                                                               |
+            |                        |               +---------------------------------------+                                                                   ^                                |                                                               |
+            |                        |                                        |  assigned to connection                                                          |                                |                                                               V
+            |                        |                                        v                                                                                [msg] req                          |                                                               |
+            |                        |     create            +---------------------------------------------+    connect to Broker(Rabbitmq-Server)               |               return a channel |                                                               |
+            |                        | --------------------> | connection(common.rpc.impl_kombu:Connection)| -------------------------------+-----------------------------------------------------+                                                               |
+            |                        |                       +---------------------------------------------+                                |return a channel    |                                                                                                |
+            |                        |                                        ^                                                             |                    |                                                                                                |
+            |                        |                                        |                                                             |                    |                                                                                                |
+            |                        |                                        | append consumer into                           +---         V                    |                                                                                                |
+            |                        |                                        | self.consumers                                |      +--------------+            |                                                                                                |
+            |                        |                                        |                                               |  +- -| self.channel | ---------------< --[msg]-------------------------<<<<<<<<<<<------------------<<<<<<<<<<<-------------------+
+            |                        |                                        |                                               |  |   +--------------+            |        req
+            |                        |     create_consumer               +-----------------------------------------------+    |  |   +----------+                |
+            |                        | --------------------------------> | consumer(common.rpc.impl_kombu:TopicConsumer) | -- |  |   | callback | ---------------+
+            |                        |                                   +-----------------------------------------------+    |  |   +----------+
+            |                        |                                                                                        |[msg] req    ^
+            |                        |                                                                                        |  |          |
+            |                        |                                                                                        |  |          +--------------------------------+
+            |                        |     consume_in_thread     +----------------+                                           |  |   +---------------------------+           |
+            |                        | ----------------------->  |  greenthread   |                                           |  +- >| exchange(named from conf) |           |
+            |                        |                           +----------------+                                           |      +---------------------------+           |
+            |                        |                              ^      |                                                  |       |   |                                [msg] req
+            |                        |                              |      |                                                  | req [msg] | bound together                   |
+            |                                              activate |      |                                                  |       v   |                                  |
+            |                                                       |      |                                                  |      +-------+                               |
+            |     eventlet.event.Event().wait()                     |      |                                                  |      | queue | ------------------------------+
+            | -----------------------------------------------------+       |                                                  |      +-------+
+            |                                                              |                                                   +---    ^
+            |                                                              |                     invoke                                |
+            |                                                               + --------------------------------------------------------+
+
+
+
+
+
