@@ -5,7 +5,7 @@ can use it for second development at any time or any where.
 #####
 
 Two faces:
-  1> server: you can redefine the Class Manager in the module messager.server for your server-end.
+  1> server: you can redefine the Class Manager in the module messager.server for your server-end.        
   2> client: messager.client:ClientProducerAPI can be more efficiency and scalable by yourself.
   3> topic:  help yourself too.
   
