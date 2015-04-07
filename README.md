@@ -1,8 +1,8 @@
 
-#####
+######
 This is a AMQP lib using kombu as idiomatic high-level interface dissociation from openstack component neutron, you 
 can use it for second development at any time or any where.
-#####
+######
 
 Two faces:
   1> server: you can redefine the Class Manager in the module messager.server for your server-end. 
